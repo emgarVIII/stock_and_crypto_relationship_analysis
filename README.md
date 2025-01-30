@@ -73,7 +73,7 @@ This project aims to offer insights into the intersection between **traditional 
 
 ---
 
-- ## Areas for Improvement / Further Development  
+## Areas for Improvement / Further Development  
 (Based on feedback from Professor Linero at **UT Austin**)
 
 The following aspects are **missing, need revision and/or can be improved**:
