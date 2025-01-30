@@ -1,0 +1,843 @@
+---
+title: "Stock Market & Cryptocurrency Relationships"
+author: "Mauricio Garcia"
+format: html
+editor: visual
+---
+
+```{r}
+#install.packages("tidyquant")
+#install.packages("dplyr")
+#install.packages("lubridate")
+#install.packages("tidyr")
+#install.packages("ggplot2")
+#install.packages("quarto")
+
+library(tidyquant)
+library(dplyr)
+library(lubridate)
+library(tidyr)
+library(ggplot2)
+library(car)     # VIF
+library(caret)   # cross-validation
+library(splines) # splines
+```
+
+## Stock Market & Cryptocurrency Analysis
+
+In this project, I will analyze the relationships between the stock market and cryptocurrency markets, focusing on how they interact and influence each other. Specifically, I will explore whether cryptocurrency returns (Bitcoin and Ethereum) correlate with the returns of a widely used stock market benchmark, the SPY ETF, which tracks the S&P 500 index.
+
+The dataset consists of daily data from 2017-11-09 to 2024-12-10, covering key variables such as daily closing prices, high and low prices, trading volumes, and smoothed prices (average of high and low). This timeframe was chosen because it captures significant cryptocurrency adoption milestones while ensuring consistent data availability for all assets.
+
+The outcome variable of interest is daily return of BTC (we will be analyzing ETH as well, see hypothesis section for more), representing the percentage change in Bitcoin’s value from one day to the next. Predictors & variables include, but not limited to:
+
+-   Returns of Bitcoin and Ethereum (numeric variables).
+-   Prices of these three assets (numeric variables).
+-   The day of the week (a categorical variable) to examine potential weekday effects.
+-   Trading volumes for Bitcoin, Ethereum, and SPY to explore correlations (numeric variables).
+
+## Personal Motivations & Interest
+
+I conducted this analysis for two main reasons:
+
+1.  [**Personal Experience:**]{.underline} I am fairly active in both the stock and cryptocurrency markets. Naturally, many questions arise about the potential connections between these two markets, and I want to explore those relationships.
+
+2.  [**Helping Others Transition:**]{.underline} I know many people who are interested in getting started with trading in either the stock or cryptocurrency markets. Some are more familiar with one market than the other—most people are generally more accustomed to the stock market, as it is more established. I want this analysis to serve as a helpful resource for anyone looking to make the transition from one market to the other. Additionally, since my target audience includes beginners or those with little technical experience, I will be providing thorough explanations to ensure clarity.
+
+## Important Terms to Know
+
+If you're not familiar with the stock or cryptocurrency markets, here are some important terms to know:
+
+1.  **Market capitalization:**
+
+    -   Market capitalization, often referred to as "market cap," is the total market value of an asset or company. It is calculated by multiplying the current price by the total number of outstanding shares or coins.
+
+    -   Market cap is a key measure of an asset’s size and perceived stability in comparison to others.
+
+2.  **Volume**:
+
+    -   Volume measures the total amount of an asset traded over a given time period. High volume often indicates strong investor interest or market activity, whereas low volume might signal indecision or a lack of engagement.
+
+    -   In this analysis, volume can help explore relationships between market activity in SPY, Bitcoin, and Ethereum.
+
+3.  **Daily Return**:
+
+    -   The daily return is the percentage change in an asset's price from one day to the next.
+
+4.  **ETF (Exchange-Traded Fund)**:
+
+    -   An ETF is a pooled investment security that tracks an index, sector, commodity, or asset, and can be traded on an exchange like a stock.
+
+    -   SPY is an ETF that mirrors the performance of the S&P 500 Index, making it a common benchmark for the U.S. stock market.
+
+## Origins of Dataset and its Construction
+
+For this analysis, I'll be looking at the very well-known SPY, which tracks the S&P 500, a broad representation of the American stock market. SPY is an ETF that is diversified across many sectors, offering exposure to a wide range of large-cap U.S. companies.
+
+As for cryptocurrency, I'll be looking at the two cryptocurrencies with the biggest market capitalizations as of 12/11/2024: Bitcoin (\~\$1.93T) and Ethereum (\~\$442B). Bitcoin has consistently held the #1 spot since its creation in 2009, and Ethereum has held the #2 spot since its launch in 2015, with only very minor, temporary fluctuations in their rankings (e.g., XRP occasionally surpassing Ethereum during market rallies most notably during December 2017 - January 2018).
+
+I used the Yahoo Finance API to get data on the stock market and cryptocurrency. We will be analyzing data from 11/09/2017 (because this is when Ethereum data becomes readily available via Yahoo Finance API) to 12/10/2024 (day this paper was worked on). There are a total of 2.589 observations, covering all three assets.
+
+### Bitcoin API Call
+
+```{r}
+# calls Yahoo Finance API and gets Bitcoin data
+crypto_btc_data <- tq_get("BTC-USD", from = "2017-11-09", to = "2024-12-10")
+head(crypto_btc_data)
+```
+
+### Ethereum API Call
+
+```{r}
+crypto_eth_data <- tq_get("ETH-USD", from = "2017-11-09", to = "2024-12-10")
+head(crypto_eth_data)
+```
+
+### SPY API Call
+
+```{r}
+spy_data <- tq_get("SPY", from = "2017-11-09", to = "2024-12-10")
+head(spy_data)
+```
+
+## Preprocessing & Cleaning Data
+
+### Checking for Missing Values
+
+We will check for NaN (missing) values before combining any of these three datasets, ensuring we have no NaN values.
+
+```{r}
+# check for NaN values
+sum(is.na(spy_data))
+sum(is.na(crypto_btc_data))
+sum(is.na(crypto_eth_data))
+```
+
+There are no missing values in any of the three datasets.
+
+### Accounting for Different Opening & Closing Times
+
+A problem I faced very early on was: which price do I look at for this analysis? Close, open, etc? Would this even matter much? For reference, the stock market is open from 9:30am to 4pm (EST) and cryptocurrencies can be traded 24/7. Due to this difference in trading hours, categories such as volume (lower time frame for SPY), close, open, high and low do not match up regarding time. In the grand scheme of things, this could alter results slightly because we are evaluating these prices at different times. To avoid this, I decided to smooth the prices by taking the average of both the high and the low. I chose both these columns because high and low are not time-sensitive (as these can happen at any time of the day).
+
+#### Smoothing via averaging the highs and lows of BTC, ETH, & SPY
+
+```{r}
+spy_data <- spy_data %>%
+  mutate(smoothed_price = (high + low) / 2)
+
+crypto_btc_data <- crypto_btc_data %>%
+  mutate(smoothed_price = (high + low) / 2)
+
+crypto_eth_data <- crypto_eth_data %>%
+  mutate(smoothed_price = (high + low) / 2)
+```
+
+#### Verify if smoothed_price column was made successfully
+
+```{r}
+head(spy_data)
+head(crypto_btc_data)
+head(crypto_eth_data)
+```
+
+### Combining the three datasets into one
+
+#### Ensure that all three datasets have the same columns for smooth combination
+
+```{r}
+# check columns in each dataset
+names(spy_data)
+names(crypto_btc_data)
+names(crypto_eth_data)
+```
+
+#### Combine the datasets
+
+```{r}
+
+# combine the datasets by aligning them on the date column
+combined_data <- full_join(spy_data, crypto_btc_data, by = "date", suffix = c("_spy", "_btc")) %>%
+                 full_join(crypto_eth_data, by = "date")
+
+# add the "_eth" suffix to its columns
+names(combined_data)[names(combined_data) %in% c("open", "high", "low", "close", "volume", "adjusted", "smoothed_price")] <- 
+    paste0(c("open", "high", "low", "close", "volume", "adjusted", "smoothed_price"), "_eth")
+
+
+# verify the full join was successful
+str(combined_data)  # check structure
+head(combined_data)  # check first few rows
+names(combined_data)  # check column names
+```
+
+#### Remove redundant columns such as symbol
+
+```{r}
+combined_data <- combined_data %>%
+  select(-symbol_spy, -symbol_btc, -symbol)
+
+# verify all three symbol columns were removed
+str(combined_data)
+names(combined_data)
+```
+
+### Adding useful variables
+
+#### Add "day_of_week" categorical variable
+
+Each day is associated with a weekday (7 categories: Sun–Sat), allowing us to analyze \~370 observations per day of the week.
+
+```{r}
+# add the day of the week under "day_of_week"
+combined_data <- combined_data %>%
+  mutate(day_of_week = wday(date, label = TRUE))
+
+# verify if "day_of_week" column is present
+head(combined_data)
+str(combined_data)
+names(combined_data)
+```
+
+#### Add a daily return column for SPY, Bitcoin, and Ethereum
+
+Returns (A.K.A. percentages, and not absolute prices) are the standard way to measure and compare asset performance in finance. They allow for a **normalized comparison** across assets with different price levels. For instance:
+
+-   A \$10 price increase is a bigger deal for Ethereum (price \~\$300) than for Bitcoin (price \~\$30,000). Returns express this change in percentage terms, making them directly comparable.
+
+```{r}
+combined_data <- combined_data %>%
+  mutate(
+    spy_return = (close_spy - lag(close_spy)) / lag(close_spy),
+    btc_return = (close_btc - lag(close_btc)) / lag(close_btc),
+    eth_return = (close_eth - lag(close_eth)) / lag(close_eth)
+  ) %>%
+  drop_na()  # remove rows with NA values caused by lag
+
+head(combined_data)
+str(combined_data)
+names(combined_data)
+```
+
+## Hypothesis / Question Formulation
+
+1.  **Bitcoin follows stock movements**
+
+    -   *Informal Hypothesis:* On average, Bitcoin returns increase as SPY (stock market) returns increase.
+
+    -   *Statistical Hypothesis:*
+
+        -   *H0 (Null Hypothesis):* The coefficient on SPY returns in a model predicting Bitcoin returns is zero, meaning SPY returns have no effect on Bitcoin returns.
+
+        -   *HA (Alternative Hypothesis):* The coefficient on SPY returns is greater than zero, meaning higher SPY returns are associated with higher Bitcoin returns.
+
+2.  **Crypto and stock returns are highest and lowest on the same weekdays**
+
+    -   *Informal Hypothesis:* The best (highest returns) and worst (lowest returns) performing weekdays align for both SPY and Bitcoin/Ethereum.
+    -   *Statistical Approach:* Examine average returns by weekday for SPY and crypto. If patterns match, we have evidence in support of this hypothesis.
+
+3.  **Crypto and stock trading volumes are correlated**
+
+    -   *Informal Hypothesis:* High Bitcoin volume often coincides with high SPY volume. Similarly, low volumes in both might occur together, indicating shared market sentiment.
+
+    -   *Statistical Approach:* Check the correlation between volumes (volume_spy, volume_btc, volume_eth). If significant positive correlation, it suggests simultaneous volume surges.
+
+4.  **Is the famous Monday effect real for the stock market, and does it affect cryptocurrency?**
+
+    -   *Informal Hypothesis:* If the Monday effect (traditionally lower returns on Mondays) exists for SPY, we test if a similar pattern appears in Bitcoin and Ethereum returns.
+    -   *Statistical Approach:* Compare mean returns on Mondays vs. other days for both SPY and cryptos.
+
+## Exploring & Visualizing the Data
+
+### BTC Return vs. Predictors
+
+```{r}
+# Load necessary libraries if not already loaded
+library(ggplot2)
+library(gridExtra)
+
+p1 <- ggplot(combined_data, aes(x = spy_return, y = btc_return)) +
+  geom_point(alpha = 0.5, size = 2) +
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +
+  theme_minimal() +
+  labs(
+    title = "BTC Return vs. SPY Return",
+    x = "SPY Return",
+    y = "BTC Return"
+  )
+
+p2 <- ggplot(combined_data, aes(x = eth_return, y = btc_return)) +
+  geom_point(alpha = 0.5, color = "darkgreen", size = 2) +
+  geom_smooth(method = "lm", se = FALSE, color = "darkgreen") +
+  theme_minimal() +
+  labs(
+    title = "BTC Return vs. Ethereum Return",
+    x = "ETH Return",
+    y = "BTC Return"
+  )
+
+grid.arrange(p1, p2, ncol = 2)
+
+```
+
+On the left plot, the points are fairly concentrated around zero for both SPY and BTC returns, indicating that most daily returns cluster around small positive or negative percentages. There’s a fitted linear regression line in blue, which appears to slope upwards, but the relationship is relatively weak. The points are scattered widely around the line, suggesting that while there might be a slight positive relationship, SPY returns do not strongly explain BTC returns.
+
+On the right, daily BTC returns are plotted against daily ETH returns. The points form a tighter diagonal cloud, and the fitted line in dark green is clearly steeper and more aligned with the bulk of the points. This suggests a stronger positive relationship between BTC and ETH returns compared to the BTC-SPY relationship. In other words, when Ethereum’s returns are positive, Bitcoin’s returns also tend to be positive, and vice versa.
+
+Overall, the visualization highlights that while there might be some correlation with SPY (traditional stock market), Bitcoin seems more closely related to Ethereum returns. This is consistent with the expectation that two cryptocurrencies might move together more strongly than a cryptocurrency and a stock market proxy.
+
+### **Average Returns by Day of the Week**
+
+We will use boxplots to compare the average returns of SPY, Bitcoin, and Ethereum for each day of the week. This can help us assess whether there are patterns in returns based on weekdays. SPY cannot be traded on the weekends hence why the boxplot excludes weekends. Cryptocurrency can be traded 24/7.
+
+```{r}
+# SPY Returns
+ggplot(combined_data, aes(x = day_of_week, y = spy_return)) +
+  geom_boxplot(fill = "skyblue", alpha = 0.7) +
+  labs(title = "SPY Returns by Day of the Week (Excluding Weekends)", 
+       x = "Day of the Week", y = "SPY Returns") +
+  theme_minimal()
+```
+
+In this boxplot we can see there is not much clearly visible difference between the days. There are some clear outliers on Monday, Tuesday, and Friday. We will now look at the mean returns by weekday in number form instead to see if we can draw any insights from that.
+
+```{r}
+# calculate mean returns by weekday
+spy_mean_returns <- combined_data %>%
+  group_by(day_of_week) %>%
+  summarize(mean_return = mean(spy_return, na.rm = TRUE),
+            sd_return = sd(spy_return, na.rm = TRUE))  # include standard deviation
+
+print(spy_mean_returns)
+```
+
+From this we can see that there is still not much difference. The "Monday effect" is a market anomaly where stock prices often decline significantly after the weekend. As we can see here, the lowest mean return is Thursday. This dataset clearly does not confirm this. Instead, Monday shows positive mean returns, and Tuesday has the highest average performance. This may suggest that:
+
+-   The "Monday effect" may not be present in this selected timeframe.
+-   Modern markets may have mitigated historical day-of-the-week patterns due to factors like algorithmic trading or after-hours news digestion.
+
+```{r}
+# Recalculate day_of_week & returns for original cryptos
+crypto_btc_data <- crypto_btc_data %>%
+  mutate(day_of_week = wday(date, label = TRUE, week_start = 1))
+
+crypto_eth_data <- crypto_eth_data %>%
+  mutate(day_of_week = wday(date, label = TRUE, week_start = 1))
+
+crypto_btc_data <- crypto_btc_data %>%
+  arrange(date) %>%
+  mutate(btc_return = (close - lag(close)) / lag(close)) %>%
+  filter(is.finite(btc_return))  # Filter non-finite values
+
+crypto_eth_data <- crypto_eth_data %>%
+  arrange(date) %>%
+  mutate(eth_return = (close - lag(close)) / lag(close)) %>%
+  filter(is.finite(eth_return))  # Filter non-finite values
+
+# Bitcoin Returns graph
+p1 <- ggplot(crypto_btc_data, aes(x = day_of_week, y = btc_return)) +
+  geom_boxplot(fill = "orange", alpha = 0.7) +
+  labs(title = "Bitcoin Returns by Day of the Week (Including Weekends)", 
+       x = "Day of the Week", y = "Bitcoin Returns") +
+  theme_minimal()
+
+# Ethereum Returns graph
+p2 <- ggplot(crypto_eth_data, aes(x = day_of_week, y = eth_return)) +
+  geom_boxplot(fill = "lightgreen", alpha = 0.7) +
+  labs(title = "Ethereum Returns by Day of the Week (Including Weekends)", 
+       x = "Day of the Week", y = "Ethereum Returns") +
+  theme_minimal()
+
+p1
+p2
+# grid.arrange(p1, p2, ncol = 2)
+
+```
+
+The Monday effect, typically observed in traditional markets, is not reflected in the cryptocurrency boxplots. Furthermore, the average returns appear relatively consistent across all days of the week. However, Wednesday shows slightly higher returns within the upper bounds of its boxplot, suggesting potential outperformance on this day compared to others.
+
+### Volume Correlations
+
+We can test the hypothesis: **Crypto and stock trading volumes are correlated.**
+
+```{r}
+# correlation matrix for volumes
+volume_corr <- combined_data %>%
+  select(volume_spy, volume_btc, volume_eth) %>%
+  cor(use = "complete.obs")
+print(volume_corr)
+
+# scatterplots for volume relationships
+ggplot(combined_data, aes(x = volume_spy, y = volume_btc)) +
+  geom_point(alpha = 0.5) +
+  labs(title = "SPY vs. Bitcoin Volume", x = "SPY Volume", y = "Bitcoin Volume") +
+  theme_minimal()
+
+ggplot(combined_data, aes(x = volume_spy, y = volume_eth)) +
+  geom_point(alpha = 0.5) +
+  labs(title = "SPY vs. Ethereum Volume", x = "SPY Volume", y = "Ethereum Volume") +
+  theme_minimal()
+
+```
+
+The results from the correlation matrix and scatterplots can address the hypothesis that crypto and stock trading volumes might be correlated. Specifically, if high volume in Bitcoin or Ethereum coincides with high volume in SPY, it might indicate shared market sentiment or simultaneous interest across both markets.
+
+**Observations from the Correlation Matrix:**
+
+-   **SPY & Bitcoin Volumes:** The correlation is approximately -0.0017, which is effectively zero. This suggests that increases in SPY trading volume do not coincide with predictable increases (or decreases) in Bitcoin volume.
+
+-   **SPY & Ethereum Volumes:** The correlation is about -0.0515, still very close to zero. Again, there’s no strong indication that when SPY volume is high, Ethereum volume is also high (or low).
+
+-   **Bitcoin & Ethereum Volumes:** Here we see a strong positive correlation of about 0.86. This indicates that Bitcoin and Ethereum volumes tend to move together, which might reflect a common investor base or simultaneous interest in the crypto market.
+
+These findings suggest that while cryptocurrencies (Bitcoin and Ethereum) are closely linked to each other in terms of trading activity, their volumes are not moving in tandem with SPY. In other words, stock market trading volume (as measured by SPY) does not appear to be a reliable indicator of how active the crypto markets will be on any given day.
+
+**Caveat:**
+
+It’s important to note that SPY is just one ETF representing the S&P 500 index, not the entire stock market. It’s possible that different segments of the equity market, or other asset classes, might show different relationships with crypto volumes.
+
+### Price Trends Over Time
+
+```{r}
+# approximate supply values from December 2024
+supply_data <- tibble(
+  Asset = c("SPY", "Bitcoin", "Ethereum"),
+  Supply = c(930e6, 19.5e6, 120e6) # SPY in shares, BTC, and ETH in coins
+)
+
+# create market cap from smoothed prices
+smoothed_prices <- combined_data %>%
+  select(date, smoothed_price_spy, smoothed_price_btc, smoothed_price_eth) %>%
+  pivot_longer(cols = starts_with("smoothed_price"), 
+               names_to = "Asset", 
+               values_to = "Smoothed_Price") %>%
+  mutate(Asset = case_when(
+    Asset == "smoothed_price_spy" ~ "SPY",
+    Asset == "smoothed_price_btc" ~ "Bitcoin",
+    Asset == "smoothed_price_eth" ~ "Ethereum"
+  )) %>%
+  left_join(supply_data, by = "Asset") %>%
+  mutate(Market_Cap = Smoothed_Price * Supply)
+
+# plot scaled by market cap
+ggplot(smoothed_prices, aes(x = date, y = Market_Cap, color = Asset)) +
+  geom_line(size = 1) +
+  labs(title = "Market Cap Trends Over Time",
+       x = "Date", y = "Market Capitalization",
+       color = "Asset") +
+  theme_minimal()
+```
+
+This graph gives uses our smoothed prices with the current circulating supply and shares outstanding for these assets. It gives us a beautiful graph that showcases the outstanding, unusual growth of cryptocurrencies and the stability of SPY.
+
+## Fitting the first Multiple Linear Regression Model
+
+Let's start with a multiple linear regression model predicting btc_return from spy_return, volume_spy, and day_of_week.
+
+Model:
+
+-   btc_return \~ spy_return + volume_spy + volume_btc + day_of_week
+
+This model examines the relationship between Bitcoin returns and the U.S. stock market (via SPY returns), along with Bitcoin’s own trading volume and the volume of SPY (which may reflect overall market participation), as well as day-of-week patterns.
+
+```{r}
+model1 <- lm(btc_return ~ spy_return + volume_spy + volume_btc + day_of_week, data = combined_data)
+summary(model1)
+```
+
+**Key Points:**
+
+-   **Overall Model Significance:**
+
+    -   The F-statistic is approximately 19.8 with a p-value \< 2.2e-16. This means that as a group, the predictors in the model are significantly related to btc_return. In other words, the model is capturing some statistically significant relationships, even if modest.
+
+-   **R-squared:**
+
+    -   Multiple R-squared: 0.07253 (\~7.25%)
+
+    -   Adjusted R-squared: 0.06887 (\~6.89%)
+
+    -   This suggests that the model explains around 7% of the variation in Bitcoin returns. While statistically significant, the practical explanatory power is quite low. Markets are complex, and returns are influenced by many factors not captured here.
+
+-   **Coefficients:**
+
+    -   **Intercept:** Estimate is 0.00209, not significant (p=0.437). This implies that when all predictors are at their baseline (and for the reference day_of_week), the expected BTC return doesn’t differ significantly from zero.
+
+    -   **SPY Return:** Estimate = 0.9378 with p \< 2e-16. This is strongly significant and suggests that when SPY return increases by 1 unit (100%), BTC return increases on average by about 0.94 units. Of course, SPY returns are usually much smaller than 100%, so practically, a small positive change in SPY return corresponds to a smaller but still positive expected change in BTC return.
+
+    -   **Volume Variables (SPY and BTC):**
+
+        -   SPY Volume coefficient: -1.53e-11, p=0.539
+
+        -   BTC Volume coefficient: 3.97e-14, p=0.414\
+            Both are not statistically significant. This indicates that for this dataset, variations in daily trading volume (of SPY or BTC) do not have a clear linear relationship with daily BTC returns once we account for SPY returns and day_of_week.
+
+    -   **day_of_week:**\
+        The day_of_week variable is represented in polynomial contrasts (L, Q, C, \^4, etc.), which can make interpretation less direct. None of these terms are significant (all p-values \> 0.1). This suggests no strong day-of-week pattern in BTC returns after controlling for SPY returns and volumes.
+
+    -   Practically, it means that once we consider SPY returns, neither volumes nor the day of the week seem to offer much additional explanatory power for BTC returns in this model.
+
+-   **Residual Standard Error (RSE):** 0.0423
+
+    -   The RSE gives a sense of how much actual BTC returns differ from the model’s predictions. An RSE of about 0.0423 means the typical deviation between predicted and actual BTC return is about 4.23 percentage points per day. Given daily returns are often small percentages, this is not negligible—it shows predictions are still quite rough.
+
+-   **Interpretation and Implications:**
+
+    -   The strong and positive coefficient on **spy_return** supports the idea that BTC returns have some relationship to stock market movements represented by SPY. It doesn’t mean BTC is fully explained by SPY returns, but there’s a noticeable positive association.
+
+    -   Volumes and day_of_week didn’t significantly contribute to the model, suggesting these factors might not be linear predictors of BTC returns or their effects are overshadowed by other unmodeled factors.
+
+    -   The relatively low R² highlights that daily BTC returns are influenced by many other variables not included here, such as crypto-specific news, macroeconomic conditions, investor sentiment, regulatory changes, or global events.
+
+In summary, the model shows a statistically significant but weak ability to explain BTC returns. SPY returns appear relevant, but volume and day_of_week effects are minimal in this context.
+
+### Diagnostic Checks
+
+We will check whether assumptions are met and consider potential improvements if needed.
+
+```{r}
+library(ggfortify)
+
+autoplot(model1)
+```
+
+We look for non-random patterns in residuals, non-constant variance, or deviations from normality. If issues arise, we might consider transformations or adding nonlinear terms. Here is a breakdown:
+
+-   **Residuals vs. Fitted:**
+
+    -   The points appear roughly centered around zero, with no strong pattern. This suggests the mean-zero residual assumption is reasonably met, though some clustering near zero is expected since returns are small.
+
+-   **Q-Q Plot:**
+
+    -   The Q-Q plot shows residuals deviating somewhat from the straight line (in the tails). This suggests the residuals are not perfectly normally distributed. From what I could find, this is not uncommon in financial return data (perfect normality is rarely achieved & returns typically have these distributions). Mild deviations from normality are less critical compared to mean-zero residuals and constant variance.
+
+-   **Scale-Location Plot:**
+
+    -   The spread of residuals seems relatively even, indicating no major heteroscedasticity (no clear pattern of increasing or decreasing variance).
+
+-   **Residuals vs. Leverage:**
+
+    -   While not perfect, slight deviations could acceptable. A few points have more leverage, but it does not seem like it is something to act upon. There are bigger issues (see next section). There is one evident point at the very right side.
+
+## Improving the Model
+
+Although our initial linear regression model showed that SPY returns have a statistically significant relationship with Bitcoin returns, the model explains only about 7% of the variation, leaving much unexplained.
+
+### Splines
+
+1.  **Nonlinear Relationships:**
+
+    -   We can try spline terms. For example, if we suspect that the effect of SPY returns on BTC returns diminishes or changes beyond certain thresholds, we can use spline functions.
+
+```{r}
+library(splines)
+
+model_spline <- lm(btc_return ~ bs(spy_return, df=4) + volume_spy + volume_btc + day_of_week, data=combined_data)
+summary(model_spline)
+anova(model1, model_spline)
+```
+
+Using ANOVA, we can compare models. It shows an overall improvement because:
+
+-   Residual Degrees of Freedom (Res.Df) decreases from 1772 to 1769 (we used 3 extra degrees of freedom for the splines).
+
+-   Residual Sum of Squares (RSS) drops from 3.1710 to 3.1292.
+
+-   The F-test for the difference in models has a p-value of 3.197e-05 (very small), indicating that adding spline terms for spy_return significantly improves the model fit.
+
+-   The nonlinear relationship captured by spline terms better explains the variability in BTC returns than a simple linear term for SPY returns alone.
+
+2.  **Goodness-of-Fit Improvements:**
+    -   **Multiple R-squared** increases from about 0.0725 in the original model to about 0.08476 (a bit over 8%) in the spline model.
+
+    -   The Adjusted R-squared also rises slightly from about 0.0689 to about 0.0796, reflecting a better model fit even after accounting for the additional complexity.
+
+    -   While these are still relatively small R² values, it’s an improvement, suggesting that BTC returns have a more complex, nonlinear relationship with SPY returns than initially modeled.
+3.  **Coefficients of Spline Terms:**
+    -   Each of the spline coefficients (bs(spy_return, df=4)1 through bs(spy_return, df=4)4) is statistically significant. This indicates that the relationship between SPY returns and BTC returns cannot be adequately described by a single straight line. This makes complete sense given the complexities of these markets.
+4.  **volume_btc, volume_spy,** and **day_of_week** terms remain non-significant, indicating they do not substantially improve the model’s explanation of BTC returns, even after introducing nonlinearity for SPY returns.
+
+By modeling spy_return nonlinearly, we’ve captured a more accurate and richer relationship. Although the overall predictive power remains modest—markets are complex, and many other factors may be at play—the spline model provides evidence that the BTC-SPY relationship is not purely linear. It’s a step toward more sophisticated modeling approaches that can further uncover how traditional markets influence crypto returns.
+
+### Hypothesizing an Interaction
+
+#### Polynomial contrasts
+
+We might suspect that the relationship between SPY returns and BTC returns differs by the day of the week. For instance, perhaps BTC is more sensitive to SPY movements on certain weekdays. To test this, we introduce an interaction term between spy_return and day_of_week:
+
+```{r}
+model_interaction <- lm(btc_return ~ spy_return*day_of_week + volume_spy + volume_btc, data = combined_data)
+summary(model_interaction)
+```
+
+Model: btc_return \~ spy_return\*day_of_week + volume_spy + volume_btc
+
+The term spy_return:day_of_week.C is significant (p=0.00759). Polynomial contrasts (L, Q, C, \^4) represent linear, quadratic, cubic, and quartic patterns across the ordered categories. The "C" contrast relates to a cubic pattern in the day_of_week variable.
+
+#### Dummy Variables
+
+I will now try using dummy variables.
+
+```{r}
+#c onvert day_of_week into a regular factor 
+combined_data$day_of_week <- factor(combined_data$day_of_week, ordered = FALSE)
+
+# check the structure again to confirm it is no longer ordered
+str(combined_data$day_of_week)
+
+# set Monday as baseline
+combined_data$day_of_week <- relevel(combined_data$day_of_week, ref = "Mon")
+```
+
+```{r}
+model_interaction_dummy <- lm(btc_return ~ spy_return*day_of_week + volume_spy + volume_btc, data = combined_data)
+summary(model_interaction_dummy)
+```
+
+-   None of the interaction terms made from day_of_week are statistically significant at the 5% level.
+
+-   The main effect of spy_return remains significant and positive, confirming that BTC generally moves with SPY.
+
+-   Weekday main effects and interactions do not add much explanatory power either, as all their p-values are well above 0.05.
+
+### Comparing Spline Model vs. Dummy Variable Model
+
+```{r}
+anova(model_spline, model_interaction_dummy)
+```
+
+Here, we use ANOVA to compare the nonlinear model with the interaction model. These are the models:
+
+1.  Model 1 (nonlinear): btc_return \~ bs(spy_return, df = 4) + volume_spy + volume_btc + day_of_week
+
+2.  Model 2 (interaction): btc_return \~ spy_return \* day_of_week + volume_spy + volume_btc
+
+The output:
+
+-   Residual sum of squares for Model 1 (spline model): 3.1292
+
+-   Residual sum of squares for Model 2 (interaction model): 3.1561
+
+The interaction model has a slightly larger RSS, meaning it actually fits the data worse than the spline model. The F-test does not favor the interaction model.
+
+**Takeaways:**
+
+1.  Since none of the interaction terms are significant, adding them does not meaningfully improve the model’s explanatory power.
+
+2.  The comparison with the spline model shows that the spline model (nonlinear terms for SPY returns) provides a better fit than the interaction model.
+
+3.  In simpler terms, while introducing spline terms helped capture a more nuanced (nonlinear) relationship between SPY and BTC returns, trying to vary that relationship by day_of_week did not help. BTC’s sensitivity to SPY returns does not appear to differ substantially across weekdays in this dataset.
+
+Using simple spline terms is the winner here and it is better avoid day-of-week interactions.
+
+## Testing Hypotheses
+
+There were several hypotheses and questions at the start. Some we have already addressed, but I will do so more explicitly in this section. Now that we have fitted and improved models, we can test these hypotheses using statistical procedures.
+
+Note: These have been proven above.
+
+-   **Hypothesis 1:** Bitcoin follows stock movements
+
+    1.  H0: The coefficient on SPY returns in a model predicting BTC returns is zero.
+
+    2.  HA: The coefficient on SPY returns is greater than zero (positive relationship).
+
+In our final spline model, spy_return is significant and positive. We reject H0 and conclude that BTC returns increase as SPY returns increase, supporting HA.
+
+-   **Hypothesis 2:** Crypto and stock returns are highest and lowest on the same weekdays
+
+    1.  H0: There is no alignment in best/worst weekdays between SPY and BTC.
+
+    2.  HA: Best and worst-performing weekdays align for both SPY and BTC.
+
+No significant weekday pattern emerged for either SPY or BTC. We fail to reject H0 in this context, meaning we found no evidence that the best/worst days match.
+
+-   **Hypothesis 3:** Crypto and stock trading volumes (SPY) are correlated
+
+    1.  H0: No correlation between SPY volume and crypto volumes.
+
+    2.  HA: A positive correlation exists between SPY volume and crypto volumes.
+
+Near-zero correlation between SPY and crypto volumes. We fail to reject H0, as there is no evidence of a meaningful correlation.
+
+-   **Hypothesis 4:** Is the Monday effect real for the stock market, and does it affect cryptocurrency?
+
+    1.  H0: Monday returns do not differ from other weekdays for SPY or BTC.
+
+    2.  HA: Monday returns are significantly different (lower) than other weekdays.
+
+No significant Monday effect observed for SPY or BTC returns. We fail to reject H0; no Monday effect was detected.
+
+## Assessing the Robustness of Conclusions
+
+### Autoplot Observation
+
+```{r}
+autoplot(model_spline) # best model
+autoplot(model1) # original model
+```
+
+Looking at both my first model and best model, There is one point at the very right which is highly influential and an outlier observation with high leverage. Such a point might correspond to an unusual market event; a day with extreme BTC or SPY returns.
+
+A point may have high leverage if its predictor values (e.g., SPY return) are far from the bulk of the data. In financial returns, and in the context of the stock and crypto markets, this could be an especially volatile day. High leverage points can disproportionately affect regression coefficients.
+
+### Influence of Deleting High Leverage Observation
+
+First, we have to find it:
+
+```{r}
+# compute Cook's distances for all points in the model_spline
+cooks_dist <- cooks.distance(model_spline)
+
+# find the index of the observation with the highest Cook's distance
+inf_idx <- which.max(cooks_dist)
+
+inf_idx
+```
+
+Now that we have the index, we will target it, remove it, and I will re-fit my best model (spline) without it:
+
+```{r}
+data_noinf <- combined_data[-inf_idx, ]
+
+# re-fit the model without that observation
+model_spline_noinf <- lm(btc_return ~ bs(spy_return, df=4) + volume_spy + volume_btc + day_of_week,
+                         data = data_noinf)
+summary(model_spline)
+summary(model_spline_noinf)
+```
+
+-   Reducing the influential observation slightly reduces the RSE. This indicates an improvement in the model's ability to predict btc_return after accounting for outliers. The range of residuals is also slightly narrower.
+
+-   Coefficients for bs(spy_return, df = 4) terms become more positive across all spline components in the adjusted model.
+
+-   The intercept becomes larger and more negative after removing the influential observation. This suggests that the outlier was pulling the overall baseline estimate closer to zero.
+
+-   Removing the influential observation amplifies the relationship between spy_return (in its nonlinear form) and btc_return. This suggests the outlier was dampening the estimated strength of this relationship.
+
+-   Removing the influential observation improves both R-squared and adjusted R-squared values too. The change is modest, indicating that the explanatory power of the predictors remains relatively low.
+
+-   F-statistic in the original model was 16.38, while the one without the influential observation is 18.41.
+
+    -   The higher F-statistic in the adjusted model reflects an overall improvement in model fit and significance after removing the outlier. This further supports the robustness of the model's conclusions in the absence of the one extreme leverage point.
+
+### **Multicollinearity Check**
+
+I'll perform these checks on the new best model, model_spline_noinf.
+
+```{r}
+
+# compute VIF for the spline model
+vif_spline <- vif(model_spline_noinf)
+print(vif_spline)
+```
+
+All predictors have very low VIF values (well below 5), confirming that multicollinearity is not a concern for this model. This ensures that the coefficients are stable and can be interpreted reliably without issues arising from excessive correlations between predictors.
+
+### Cross-Validation
+
+To estimate the leave-one-out prediction error for the spline model without the high-leverage point, we will use LOOCV. Here's the process and interpretation.
+
+```{r}
+library(caret)
+
+# define LOOCV control
+control <- trainControl(method = "LOOCV")
+
+# train the spline model using LOOCV
+set.seed(888) 
+loocv_model <- train(
+  btc_return ~ bs(spy_return, df = 4) + volume_spy + volume_btc + day_of_week,
+  data = data_noinf,
+  method = "lm",
+  trControl = control
+)
+
+# summarize the results
+print(loocv_model)
+```
+
+-   RMSE (Root Mean Squared Error): 0.04230419
+
+    -   This indicates the average prediction error in BTC daily returns is approximately 4.23%. This is close to the Residual Standard Error (RSE) of 0.04179 from the training model, suggesting good generalization.
+
+-   R-squared (R²): 0.06617877
+
+    -   The LOOCV R² is slightly lower than the Adjusted R² of 0.08918 from the training model. While this shows a small drop, the difference is not large, probably suggesting the model is capturing meaningful patterns in the data without excessive overfitting.
+
+-   MAE (Mean Absolute Error): 0.02870759
+
+    -   This indicates that, on average, the absolute prediction error is about 2.87%, which aligns with the RMSE and suggests the predictions are reasonably accurate.
+
+### Is my best model overfit?
+
+My best model does not show signs of overfitting. Here are some reasons why:
+
+-   Comparison of RMSE and RSE:
+
+    -   The RMSE from LOOCV (0.0423) is very similar to the RSE from the training model (0.04179). This indicates no evidence of overfitting, as the model performs comparably well on unseen data.
+
+-   Comparison of LOOCV R² and Adjusted R²:
+
+    -   The LOOCV R² (0.066) is slightly lower than the Adjusted R² (0.089), but the difference is minimal. This suggests that the model generalizes well and is not overly complex.
+
+## Automatic Model Selection
+
+I implemented backward selection using the Akaike Information Criterion, also known as AIC. This method starts with all predictors and iteratively removes the least significant variable until the model with the lowest AIC is achieved.
+
+```{r}
+library(MASS)
+
+# perform backward selection on the best spline model
+backward_model <- stepAIC(model_spline_noinf, direction = "backward")
+
+# show the final model
+summary(backward_model)
+```
+
+The backward selection process removed volume_btc, volume_spy, and day_of_week from the model. This aligns with earlier findings that these predictors do not contribute significantly to explaining BTC returns.
+
+The retained nonlinear terms for SPY returns (bs(spy_return, df = 4)) confirm that BTC returns are influenced by SPY returns in a nonlinear manner. This supports the hypothesis that there is a meaningful but complex relationship between traditional stock markets and cryptocurrency markets.
+
+### Strenghts & Limitations of automatic model selection
+
+Generally speaking:
+
+-   **Strengths:**
+
+    -   The backward selection process simplified the model by removing predictors with minimal contribution, improving interpretability.
+
+    -   AIC ensured that the selected model balances goodness-of-fit with parsimony (keeping things as simple as possible while still being effective), avoiding unnecessary complexity.
+
+-   **Limitations:**
+
+    -   The automated process does not account for the research context or prior knowledge of variables' importance.
+
+    -   p-values in the final model may be inflated due to multiple comparisons during the selection process (will have a subsection dedicated to this later).
+
+    -   The backward-selected model only optimizes AIC for this specific dataset, and results may not generalize to other datasets.
+
+### Impact Automatic Model Selection has on P-values obtained from the final model
+
+Automatic model selection, such as what I used in backward selection, impact the p-values of the final model by increasing the risk of p-value inflation due to multiple comparisons made during the selection process. This means the retained predictors might appear more significant than they truly are because the process repeatedly tests and evaluates subsets of predictors. Additionally, the p-values are dataset-specific and may not generalize well to new data or contexts. While the selection improves model parsimony and interpretability, it compromises the strict validity of the p-values.
+
+## Conclusions & Final Thoughts
+
+### What I have Learned after Engaging in this Process
+
+I learned a lot more about R and became more familiar with qmd files. I also learned how much work it is to work with numbers like this; it is a lot. At the beginning, I had such a big scope set and slowly towards the end I had to make that scope smaller.
+
+### Most interesting & relevant conclusions
+
+Some notable ones:
+
+-   The Monday effect that has been around for many, many years does not seem to be prevalent in our smaller date time frame. I thought for sure this would show up here.
+
+-   There are no highly significant "best" days of the week to trade crypto.
+
+-   The correlation between SPY and BTC exists and is real. It is very much non-linear and would take lots of time to get closer to perfection. The sporadic nature of crypto does not help when making these models.
+
+-   I come from a Python-heavy background; I prefer it so much more than R Studio. I'm not sure if this is an unpopular opinion, but Python to me has more flexibility and even more things you can do (perhaps I think this because I'm newer to R Studio).
+
+### Future Avenues for Research
+
+I merely scratched the surface. Using data science & algorithms to analyze the stock and crypto market is very common, yet there is so much that goes into it. There are so many external variables that can be tested that most probably have effects on this relationship. Something that can be explored (I had no time) is correlations between SPY and cryptocurrency volumes when under different lags. Additionally, simply adding more variables could help such as macroeconomic indicators, sentiment analysis, etc.. Also, exploring more tickers as well as more cryptocurrencies would probably be insightful.
