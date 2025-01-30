@@ -73,5 +73,16 @@ This project aims to offer insights into the intersection between **traditional 
 
 ---
 
+- ## Areas for Improvement / Further Development  
+(Based on feedback from Professor Linero at **UT Austin**)
+
+The following aspects are **missing, need revision and/or can be improved**:
+
+- **State the number of observations per group** (for binary/categorical variables).
+- **Correctly interpret categorical coefficients**
+- **Use transformations to improve model fit** (or provide justification if not necessary).
+- **Analyze interactions** between variables and their effects (for example, on returns).
+- **Further test Hypotheses 2 & 3** with additional statistical measures.
+
 **📌 Author:** Mauricio Garcia 
 **📅 Last Updated:** 01/30/2025 
